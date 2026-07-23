@@ -172,7 +172,7 @@ jobs:
       - name: Run Trivy vulnerability scanner
         # FIXED: pinned to a specific released version instead of "@master"
         # (a floating branch ref is a supply-chain risk — it can change without warning)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           format: 'table'
