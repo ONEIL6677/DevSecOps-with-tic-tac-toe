@@ -6,12 +6,12 @@
 
 ## Features
 
-- 🎮 Fully functional Tic Tac Toe game
-- 📊 Score tracking for X, O, and draws
-- 📜 Game history with timestamps
-- 🏆 Highlights winning combinations
-- 🔄 Reset game and statistics
-- 📱 Responsive design for all devices
+- Fully functional Tic Tac Toe game
+- Score tracking for X, O, and draws
+- Game history with timestamps
+- Highlights winning combinations
+- Reset game and statistics
+- Responsive design for all devices
 
 ## Technologies Used
 
@@ -55,24 +55,29 @@ The game implements the following rules:
 ### Installation
 
 1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/devsecops-demo.git
-   cd devsecops-demo
-   ```
+```bash
+git clone https://github.com/yourusername/DevSecOps-with-tic-tac-toe.git
+```
+```bash
+cd DevSecOps-with-tic-tac-toe
+```
 
 2. Install dependencies:
-   ```bash
-   npm install
-   # or
-   yarn
-   ```
+```bash
+npm install
+```
+or
+yarn
+
 
 3. Start the development server:
-   ```bash
-   npm run dev
-   # or
-   yarn dev
-   ```
+```bash
+npm run dev
+```
+or
+```bash
+yarn dev
+```
 
 4. Open your browser and navigate to `http://localhost:5173`
 
@@ -82,7 +87,9 @@ To create a production build:
 
 ```bash
 npm run build
-# or
+```
+or
+```bash
 yarn build
 ```
 
