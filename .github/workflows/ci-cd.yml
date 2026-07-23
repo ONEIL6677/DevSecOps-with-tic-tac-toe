@@ -5,8 +5,8 @@ on:
     branches: [ main ]
     paths-ignore:
       - 'README.md'
-      - 'github/workflows/README.md'
-      - 'kubernetes/deployment.yaml'  # Ignore changes to this file to prevent loops
+      - '.github/workflows/README.md' # Fixed: Added missing dot prefix
+      - 'kubernetes/deployment.yaml'
   pull_request:
     branches: [ main ]
 
@@ -102,29 +102,30 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }} # Fixed: Use GITHUB_TOKEN for standard container registries
       
       - name: Extract metadata for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} # e.g ghcr.io/oneil6677/reponame
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=sha,format=long
             type=ref,event=branch
             latest
       
-      - name: Build Docker image
+      - name: Build and Push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: false
+          push: true # Fixed: Combined build and push into one step using Buildx caching
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0 # Fixed: Pin to a stable version instead of master
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
           format: 'table'
@@ -132,14 +133,6 @@ jobs:
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
-      
-      - name: Push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
       
       - name: Set image tag output
         id: set_output
@@ -154,12 +147,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.TOKEN }}
+          token: ${{ secrets.TOKEN }} # Kept: Required for pushing back to main branch to bypass workflow restrictions
       
       - name: Setup Git config
         run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
       
       - name: Update Kubernetes deployment file
         env:
@@ -167,18 +160,13 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           REGISTRY: ghcr.io
         run: |
-          # Define the new image with tag
           NEW_IMAGE="${REGISTRY}/${GITHUB_REPOSITORY}:${IMAGE_TAG}"
-          
-          # Update the deployment file directly
           sed -i "s|image: ${REGISTRY}/.*|image: ${NEW_IMAGE}|g" kubernetes/deployment.yaml
-          
-          # Verify the change
           echo "Updated deployment to use image: ${NEW_IMAGE}"
           grep -A 1 "image:" kubernetes/deployment.yaml
       
       - name: Commit and push changes
         run: |
           git add kubernetes/deployment.yaml
-          git commit -m "Update Kubernetes deployment with new image tag: ${{ needs.docker.outputs.image_tag }} [skip ci]" || echo "No changes to commit"
+          git commit -m "chore: update k8s deployment image tag to ${{ needs.docker.outputs.image_tag }} [skip ci]" || echo "No changes to commit"
           git push
