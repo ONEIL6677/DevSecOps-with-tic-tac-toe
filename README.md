@@ -1,4 +1,25 @@
 # DevSecOps Pipeline Implementation for Tic Tac Toe Game
+## Before we go to the project
+- Go to homepage of your github account
+- On the top right click on your `profile picture`
+- Scroll down and click on `settings`
+- Scroll down and click on `<>deveopers settings`
+- Click on `Personal access token`
+- Click on `Token (classic)`
+- On the top right click on your `Generate new token`
+- Click on `Generate new token (classic)`
+- Confirm your password, give required permisions and create token
+- copy token and keep somewhere because it is view once
+
+## Update in your repo so that workflows can use
+- Go to your project repo
+- On the top right click on `settings`
+- Scroll down and click on `Secrets and variables` 
+- Ckick on `actions`
+- In the middle scroll down and click on the blue button that reads `New Repository token`
+- Under `Name*` write `TOKEN`
+- Under `Secrets*` paste the secret you copied earlier
+- Click on `Add secret`
 
 ![Screenshot 2025-03-04 at 7 16 48 PM](https://github.com/user-attachments/assets/7ed79f9c-9144-4870-accd-500085a15592)
 
