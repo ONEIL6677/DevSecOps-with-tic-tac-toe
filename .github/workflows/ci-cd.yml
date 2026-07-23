@@ -1,54 +1,99 @@
-name: CI/CD devsecops Pipeline
+# =============================================================================
+# CI/CD DevSecOps Pipeline — DevSecOps-with-tic-tac-toe
+# =============================================================================
+# Flow: test + lint (parallel) -> build -> docker (build, scan, push) -> update-k8s
+# Save this file as: .github/workflows/ci-cd.yml
 
+name: CI/CD DevSecOps Pipeline
+
+# -----------------------------------------------------------------------------
+# WHEN THIS WORKFLOW RUNS
+# -----------------------------------------------------------------------------
 on:
   push:
     branches: [ main ]
     paths-ignore:
+      # Prevents an infinite loop: the "update-k8s" job commits a change to
+      # this exact file, which would otherwise re-trigger the whole pipeline.
+      - 'kubernetes/deployment.yaml'
       - 'README.md'
       - '.github/workflows/README.md'
-      - 'kubernetes/deployment.yaml'  # Ignore changes to this file to prevent loops
   pull_request:
     branches: [ main ]
 
+# -----------------------------------------------------------------------------
+# CONCURRENCY CONTROL
+# -----------------------------------------------------------------------------
+# If two commits land on main close together, this ensures pipeline runs for
+# the same branch queue up one-after-another instead of racing to push a
+# conflicting commit to kubernetes/deployment.yaml at the same time.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# -----------------------------------------------------------------------------
+# DEFAULT PERMISSIONS FOR THE BUILT-IN GITHUB_TOKEN
+# -----------------------------------------------------------------------------
+# Explicitly stating this (rather than relying on repo/org defaults) makes the
+# workflow's required access clear and portable across different repo settings.
+permissions:
+  contents: write   # needed to push the deployment-update commit
+  packages: write   # needed to push images to GitHub Container Registry (GHCR)
+
 jobs:
+
+  # ---------------------------------------------------------------------------
+  # JOB 1: Unit Testing
+  # ---------------------------------------------------------------------------
   test:
     name: Unit Testing
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-      
+          cache: 'npm'   # caches node_modules between runs for faster installs
+
       - name: Install dependencies
         run: npm ci
-      
-      - name: Run tests
-        run: npm test || echo "No tests found, would add tests in a real project"
+        # npm ci (not "npm install") does a clean, reproducible install based
+        # strictly on package-lock.json — the standard choice for CI.
 
+      - name: Run tests
+        run: npm test
+        # FIXED: removed "|| echo ..." — that pattern silently turned every
+        # test failure into a "success". If your project genuinely has no
+        # tests yet, add a real (even trivial) test instead of masking this.
+
+  # ---------------------------------------------------------------------------
+  # JOB 2: Static Code Analysis (runs in parallel with "test")
+  # ---------------------------------------------------------------------------
   lint:
     name: Static Code Analysis
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-      
+
       - name: Install dependencies
         run: npm ci
-      
+
       - name: Run ESLint
         run: npm run lint
 
+  # ---------------------------------------------------------------------------
+  # JOB 3: Build (only runs if BOTH test and lint succeed)
+  # ---------------------------------------------------------------------------
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -56,129 +101,161 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-      
+
       - name: Install dependencies
         run: npm ci
-      
+
       - name: Build project
         run: npm run build
-      
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
           path: dist/
+          # Saves the built files so the "docker" job doesn't need to rebuild
+          # the app from scratch — it downloads this artifact instead.
 
+  # ---------------------------------------------------------------------------
+  # JOB 4: Docker Build, Scan, and Push
+  # ---------------------------------------------------------------------------
   docker:
     name: Docker Build and Push
     runs-on: ubuntu-latest
     needs: [build]
     env:
       REGISTRY: ghcr.io
-      IMAGE_NAME: ${{ github.repository }}
+      IMAGE_NAME: ${{ github.repository }}   # e.g. yourname/DevSecOps-with-tic-tac-toe
+      # FIXED: compute ONE consistent tag variable up front and reuse it
+      # everywhere below, instead of having a mismatched short-SHA elsewhere.
+      IMAGE_TAG: sha-${{ github.sha }}
     outputs:
-      image_tag: ${{ steps.set_output.outputs.image_tag }}
+      image_tag: ${{ env.IMAGE_TAG }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           name: build-artifacts
           path: dist/
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.TOKEN }}
-      
+
       - name: Extract metadata for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} # e.g ghcr.io/oneil6677/reponame
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=sha,format=long
             type=ref,event=branch
             latest
-      
-      - name: Build Docker image
+
+      - name: Build Docker image (local only, not pushed yet)
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: false
+          push: false        # never push an unscanned image
+          load: true          # loads the built image into the local Docker daemon
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          load: true
-      
+
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        # FIXED: pinned to a specific released version instead of "@master"
+        # (a floating branch ref is a supply-chain risk — it can change without warning)
+        uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
+          exit-code: '1'          # fail the pipeline if matching vulnerabilities are found
+          ignore-unfixed: true     # don't fail on CVEs with no available fix yet
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
-      
-      - name: Push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-      
-      - name: Set image tag output
-        id: set_output
-        run: echo "image_tag=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
+      # -------------------------------------------------------------------------
+      # FIXED: login and push only happen on an actual push to main.
+      # Previously these ran unconditionally, meaning every pull request
+      # published a real image to the registry.
+      # -------------------------------------------------------------------------
+      - name: Login to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_PAT }}
+          # RENAMED from the generic "secrets.TOKEN" to "secrets.GH_PAT" so its
+          # purpose is unambiguous. See the README for how to create this secret.
+
+      - name: Push already-built, already-scanned image
+        if: github.event_name == 'push'
+        run: |
+          # FIXED: push the EXACT image that was just built and scanned above,
+          # instead of running build-push-action a second time (which could,
+          # in theory, produce a slightly different image than what was scanned).
+          # docker/metadata-action's multi-line tag output becomes one tag per line here.
+          echo "${{ steps.meta.outputs.tags }}" | while read -r tag; do
+            if [ -n "$tag" ]; then
+              echo "Pushing $tag"
+              docker push "$tag"
+            fi
+          done
+
+  # ---------------------------------------------------------------------------
+  # JOB 5: Update the Kubernetes Deployment manifest with the new image tag
+  # ---------------------------------------------------------------------------
   update-k8s:
     name: Update Kubernetes Deployment
     runs-on: ubuntu-latest
     needs: [docker]
+    # Only run this job on an actual push to main — never on pull requests,
+    # since a PR should never trigger a deployment-manifest change.
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.TOKEN }}
-      
+          token: ${{ secrets.GH_PAT }}
+          # A Personal Access Token is required here (not the default
+          # GITHUB_TOKEN) because pushing a new commit back to a protected
+          # branch typically requires a token with broader repo permissions.
+
       - name: Setup Git config
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-      
+          # Consider changing this to a dedicated bot account identity for
+          # your organization instead of the generic default shown here.
+
       - name: Update Kubernetes deployment file
         env:
-          IMAGE_TAG: sha-${{ github.sha }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
           REGISTRY: ghcr.io
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          IMAGE_TAG: ${{ needs.docker.outputs.image_tag }}
+          # FIXED: this now reuses the EXACT tag that was actually built,
+          # scanned, and pushed in the "docker" job — no more mismatch.
         run: |
-          # Define the new image with tag
           NEW_IMAGE="${REGISTRY}/${GITHUB_REPOSITORY}:${IMAGE_TAG}"
-          
-          # Update the deployment file directly
+
+          # Replace the image line in the deployment manifest with the new image
           sed -i "s|image: ${REGISTRY}/.*|image: ${NEW_IMAGE}|g" kubernetes/deployment.yaml
-          
-          # Verify the change
+
           echo "Updated deployment to use image: ${NEW_IMAGE}"
           grep -A 1 "image:" kubernetes/deployment.yaml
-      
+
       - name: Commit and push changes
         run: |
           git add kubernetes/deployment.yaml
-          git commit -m "Update Kubernetes deployment with new image tag: ${{ needs.docker.outputs.image_tag }} [skip ci]" || echo "No changes to commit"
+          # "|| echo ..." here is fine (unlike in the test step) — it only
+          # handles the harmless case where sed made no actual change.
+          git commit -m "Update Kubernetes deployment with image tag: ${{ needs.docker.outputs.image_tag }} [skip ci]" || echo "No changes to commit"
           git push
